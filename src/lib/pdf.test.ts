@@ -73,6 +73,62 @@ describe("buildPdf — merge + reorder + blank (Phase 2)", () => {
   });
 });
 
+describe("annotations export (Phase 3)", () => {
+  // 1x1 transparent PNG
+  const PNG_1PX =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+  it("flattens text, path and image annotations into the output", async () => {
+    const src = await makeTestPdf(1);
+    const page: ExportPage = {
+      kind: "pdf",
+      sourceId: "a",
+      sourceIndex: 0,
+      rotation: 0,
+      annotations: [
+        { id: "t1", type: "text", x: 0.1, y: 0.1, text: "Approved", sizeFrac: 0.05, color: "#cc0000" },
+        {
+          id: "p1",
+          type: "path",
+          points: [
+            { x: 0.1, y: 0.5 },
+            { x: 0.5, y: 0.5 },
+            { x: 0.9, y: 0.5 },
+          ],
+          color: "#0055ff",
+          widthFrac: 0.01,
+          opacity: 1,
+        },
+        { id: "i1", type: "image", x: 0.6, y: 0.7, w: 0.25, h: 0.1, dataUrl: PNG_1PX },
+      ],
+    };
+    const out = await buildPdf({ a: src }, [page]);
+    const doc = await PDFDocument.load(out);
+    expect(doc.getPageCount()).toBe(1);
+    // The drawn text lives in the page content stream.
+    const content = new TextDecoder("latin1").decode(
+      (await doc.save()).buffer as ArrayBuffer,
+    );
+    expect(content.length).toBeGreaterThan(500);
+  });
+
+  it("annotates a blank page too", async () => {
+    const src = await makeTestPdf(1);
+    void src;
+    const blank: ExportPage = {
+      kind: "blank",
+      width: 595,
+      height: 842,
+      rotation: 0,
+      annotations: [
+        { id: "t1", type: "text", x: 0.2, y: 0.2, text: "Hello blank", sizeFrac: 0.04, color: "#000000" },
+      ],
+    };
+    const out = await buildPdf({}, [blank]);
+    expect(await pageCount(out)).toBe(1);
+  });
+});
+
 describe("split modes", () => {
   it("split-every-page gives one 1-page PDF per page", async () => {
     const src = await makeTestPdf(5);

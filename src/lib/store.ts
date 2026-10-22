@@ -1,5 +1,7 @@
 import { create } from "zustand";
+import type { Annotation } from "./annotations";
 
+export type { Annotation };
 export type Rotation = 0 | 90 | 180 | 270;
 
 export interface SourceDoc {
@@ -21,6 +23,7 @@ export interface PageItem {
   height?: number;
   selected: boolean;
   rotation: Rotation;
+  annotations: Annotation[];
 }
 
 interface SplitifyState {
@@ -41,6 +44,9 @@ interface SplitifyState {
   move: (id: string, dir: 1 | -1) => void;
   moveTo: (draggedId: string, targetId: string) => void;
   insertBlank: (afterId?: string) => void;
+  addAnnotation: (pageId: string, annotation: Annotation) => void;
+  undoAnnotation: (pageId: string) => void;
+  clearAnnotations: (pageId: string) => void;
   setBusy: (busy: string | null) => void;
   setError: (error: string | null) => void;
 }
@@ -56,6 +62,7 @@ function pagesForSource(sourceId: string, pageCount: number): PageItem[] {
     sourceIndex: i,
     selected: true,
     rotation: 0 as Rotation,
+    annotations: [],
   }));
 }
 
@@ -124,7 +131,11 @@ export const useStore = create<SplitifyState>((set) => ({
     set((s) => {
       const idx = s.pages.findIndex((p) => p.id === id);
       if (idx === -1) return s;
-      const copy: PageItem = { ...s.pages[idx], id: nextId("p") };
+      const copy: PageItem = {
+        ...s.pages[idx],
+        id: nextId("p"),
+        annotations: [...s.pages[idx].annotations],
+      };
       const pages = [...s.pages];
       pages.splice(idx + 1, 0, copy);
       return { pages };
@@ -163,6 +174,7 @@ export const useStore = create<SplitifyState>((set) => ({
         height: 841.89,
         selected: true,
         rotation: 0,
+        annotations: [],
       };
       if (!afterId) return { pages: [...s.pages, blank] };
       const idx = s.pages.findIndex((p) => p.id === afterId);
@@ -171,6 +183,25 @@ export const useStore = create<SplitifyState>((set) => ({
       pages.splice(idx + 1, 0, blank);
       return { pages };
     }),
+
+  addAnnotation: (pageId, annotation) =>
+    set((s) => ({
+      pages: s.pages.map((p) =>
+        p.id === pageId ? { ...p, annotations: [...p.annotations, annotation] } : p,
+      ),
+    })),
+
+  undoAnnotation: (pageId) =>
+    set((s) => ({
+      pages: s.pages.map((p) =>
+        p.id === pageId ? { ...p, annotations: p.annotations.slice(0, -1) } : p,
+      ),
+    })),
+
+  clearAnnotations: (pageId) =>
+    set((s) => ({
+      pages: s.pages.map((p) => (p.id === pageId ? { ...p, annotations: [] } : p)),
+    })),
 
   setBusy: (busy) => set({ busy }),
   setError: (error) => set({ error }),

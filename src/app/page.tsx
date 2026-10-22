@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, PDFDocumentLoadingTask } from "pdfjs-dist";
 import UploadZone from "@/components/UploadZone";
 import PageThumb from "@/components/PageThumb";
+import PageEditor from "@/components/PageEditor";
 import { useStore } from "@/lib/store";
 import { parseRange } from "@/lib/range";
 import {
@@ -37,6 +38,7 @@ export default function Home() {
   const [rangeInput, setRangeInput] = useState("");
   const [rangeMsg, setRangeMsg] = useState<string | null>(null);
   const [chunkN, setChunkN] = useState(3);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const tasksRef = useRef<Record<string, PDFDocumentLoadingTask>>({});
   const addInputRef = useRef<HTMLInputElement>(null);
 
@@ -126,12 +128,19 @@ export default function Home() {
   const toExport = (items: typeof pages): ExportPage[] =>
     items.map((p) =>
       p.kind === "blank"
-        ? { kind: "blank" as const, width: p.width ?? 595.28, height: p.height ?? 841.89, rotation: p.rotation }
+        ? {
+            kind: "blank" as const,
+            width: p.width ?? 595.28,
+            height: p.height ?? 841.89,
+            rotation: p.rotation,
+            annotations: p.annotations,
+          }
         : {
             kind: "pdf" as const,
             sourceId: p.sourceId!,
             sourceIndex: p.sourceIndex!,
             rotation: p.rotation,
+            annotations: p.annotations,
           },
     );
 
@@ -321,10 +330,26 @@ export default function Home() {
                   page={p}
                   position={idx + 1}
                   sourceLabel={multiSource ? sourceShort(p.sourceId) : undefined}
+                  onAnnotate={setEditingId}
                 />
               ))}
             </div>
           )}
+
+          {editingId &&
+            (() => {
+              const idx = pages.findIndex((p) => p.id === editingId);
+              if (idx === -1) return null;
+              const p = pages[idx];
+              return (
+                <PageEditor
+                  page={p}
+                  doc={p.sourceId ? (docs[p.sourceId] ?? null) : null}
+                  position={idx + 1}
+                  onClose={() => setEditingId(null)}
+                />
+              );
+            })()}
 
           {/* Sticky action bar */}
           <div className="fixed inset-x-0 bottom-0 border-t border-zinc-200 bg-white/95 backdrop-blur">

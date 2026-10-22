@@ -20,11 +20,21 @@ Pick the pages you need from a PDF and save them as a new PDF.
 - **Download all in order** exports the full list (after reordering/merging) as one PDF
 - Exports mix pages from different source PDFs and blank pages in any order
 
+### Phase 3 — Annotate + sign (built 2026-10-22)
+- Tap **✎** on any page to open the editor (badge shows its annotation count)
+- **Text** (tap to place, any colour), **Draw**, **Highlight**, **Image** (tap to place a PNG/JPG)
+- **Signature pad**: draw your signature, it's placed at the page's bottom-right
+- Undo / Clear-all per page; annotations are stored in resolution-independent
+  coordinates and **flattened into the exported PDF** (they are part of the page,
+  not a separate layer)
+- Works on blank pages too. Note: annotation placement is exact on unrotated
+  pages; on rotated pages the export applies the rotation transform (best effort)
+
 ## Run it
 ```bash
 npm install
 npm run dev      # http://localhost:3000
-npm test         # 23 tests: range parser, extraction/split/rotation, merge, store ops
+npm test         # 32 tests: range parser, extraction/split/rotation, merge, store ops, annotation coords + export
 npm run build    # production build
 ```
 
@@ -36,7 +46,6 @@ Next.js (App Router) + TypeScript + Tailwind · `pdfjs-dist` (rendering) ·
 `pdf-lib` (output) · `jszip` · Zustand
 
 ## Roadmap
-- Phase 3: annotate — text, draw/highlight, image, signature (flattened into output)
 - Phase 4: page numbers, watermark, white-out + retype
 
 > Note: true Word-style editing of existing PDF text is out of scope — PDFs have no

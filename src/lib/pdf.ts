@@ -1,5 +1,11 @@
-import { PDFDocument, degrees } from "pdf-lib";
+import { PDFDocument, StandardFonts, degrees, rgb, type PDFPage } from "pdf-lib";
 import JSZip from "jszip";
+import {
+  displayedSize,
+  hexToRgb,
+  toUserSpace,
+  type Annotation,
+} from "./annotations";
 
 export type ExportPage =
   | {
@@ -9,13 +15,88 @@ export type ExportPage =
       /** 0-based index into that source document */
       sourceIndex: number;
       rotation: 0 | 90 | 180 | 270;
+      annotations?: Annotation[];
     }
   | {
       kind: "blank";
       width: number;
       height: number;
       rotation: 0 | 90 | 180 | 270;
+      annotations?: Annotation[];
     };
+
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.split(",")[1] ?? "";
+  if (typeof atob === "function") {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  return new Uint8Array(Buffer.from(base64, "base64"));
+}
+
+/** Draw a page's annotations on top of it, flattened into the content. */
+async function drawAnnotations(
+  out: PDFDocument,
+  page: PDFPage,
+  annotations: Annotation[],
+  pageW: number,
+  pageH: number,
+  rotation: 0 | 90 | 180 | 270,
+): Promise<void> {
+  const { w: Wd, h: Hd } = displayedSize(pageW, pageH, rotation);
+  // Point in displayed space (fractions x from left, y from top) -> user space
+  const conv = (fx: number, fyTop: number) =>
+    toUserSpace(pageW, pageH, rotation, fx * Wd, Hd - fyTop * Hd);
+
+  let font: Awaited<ReturnType<PDFDocument["embedFont"]>> | null = null;
+  for (const ann of annotations) {
+    if (ann.type === "text") {
+      if (!font) font = await out.embedFont(StandardFonts.Helvetica);
+      const size = Math.max(6, ann.sizeFrac * Hd);
+      // Editor y is the top of the text; baseline sits ~0.8em below the top.
+      const baselineFracY = ann.y + (size * 0.8) / Hd;
+      const pt = conv(ann.x, baselineFracY);
+      const c = hexToRgb(ann.color);
+      page.drawText(ann.text, {
+        x: pt.x,
+        y: pt.y,
+        size,
+        font,
+        color: rgb(c.r, c.g, c.b),
+        rotate: degrees(rotation),
+      });
+    } else if (ann.type === "path") {
+      const c = hexToRgb(ann.color);
+      const color = rgb(c.r, c.g, c.b);
+      const thickness = Math.max(0.5, ann.widthFrac * Wd);
+      const pts = ann.points.map((p) => conv(p.x, p.y));
+      if (pts.length === 1) {
+        page.drawCircle({ x: pts[0].x, y: pts[0].y, size: thickness / 2, color, opacity: ann.opacity });
+      }
+      for (let i = 1; i < pts.length; i++) {
+        page.drawLine({
+          start: pts[i - 1],
+          end: pts[i],
+          thickness,
+          color,
+          opacity: ann.opacity,
+        });
+      }
+    } else if (ann.type === "image") {
+      const bytes = dataUrlToBytes(ann.dataUrl);
+      const img = ann.dataUrl.startsWith("data:image/jpeg") || ann.dataUrl.startsWith("data:image/jpg")
+        ? await out.embedJpg(bytes)
+        : await out.embedPng(bytes);
+      const w = ann.w * Wd;
+      const h = ann.h * Hd;
+      // (x, y) of the image is its bottom-left in displayed space.
+      const pt = conv(ann.x, ann.y + ann.h);
+      page.drawImage(img, { x: pt.x, y: pt.y, width: w, height: h, rotate: degrees(rotation) });
+    }
+  }
+}
 
 /** Map of sourceId -> source PDF bytes */
 export type Documents = Record<string, Uint8Array>;
@@ -49,6 +130,9 @@ export async function buildPdf(
     if (page.kind === "blank") {
       const blank = out.addPage([page.width, page.height]);
       if (page.rotation) blank.setRotation(degrees(page.rotation));
+      if (page.annotations?.length) {
+        await drawAnnotations(out, blank, page.annotations, page.width, page.height, page.rotation);
+      }
       continue;
     }
     let src = loaded.get(page.sourceId);
@@ -59,11 +143,22 @@ export async function buildPdf(
       loaded.set(page.sourceId, src);
     }
     const [copied] = await out.copyPages(src, [page.sourceIndex]);
+    const sourceRotation = copied.getRotation().angle;
+    const effective = normaliseRotation(sourceRotation + page.rotation);
     if (page.rotation) {
-      const current = copied.getRotation().angle;
-      copied.setRotation(degrees(normaliseRotation(current + page.rotation)));
+      copied.setRotation(degrees(effective));
     }
     out.addPage(copied);
+    if (page.annotations?.length) {
+      await drawAnnotations(
+        out,
+        copied,
+        page.annotations,
+        copied.getWidth(),
+        copied.getHeight(),
+        effective,
+      );
+    }
   }
   return out.save();
 }

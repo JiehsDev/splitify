@@ -10,6 +10,7 @@ export default function PageThumb({
   page,
   position,
   sourceLabel,
+  onAnnotate,
 }: {
   doc: PDFDocumentProxy | null;
   page: PageItem;
@@ -17,6 +18,7 @@ export default function PageThumb({
   position: number;
   /** short source file name, shown when there are multiple sources */
   sourceLabel?: string;
+  onAnnotate?: (pageId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -140,6 +142,9 @@ export default function PageThumb({
           <button type="button" title="Rotate left" aria-label="Rotate left" onClick={() => rotate(page.id, -1)} className={btn}>⟲</button>
           <button type="button" title="Rotate right" aria-label="Rotate right" onClick={() => rotate(page.id, 1)} className={btn}>⟳</button>
           <button type="button" title="Duplicate page" aria-label="Duplicate page" onClick={() => duplicate(page.id)} className={btn}>⧉</button>
+          <button type="button" title="Annotate / sign this page" aria-label="Annotate page" onClick={() => onAnnotate?.(page.id)} className={`${btn} font-semibold text-emerald-700 hover:bg-emerald-50`}>
+            ✎{page.annotations.length > 0 ? ` ${page.annotations.length}` : ""}
+          </button>
           <button type="button" title="Remove page" aria-label="Remove page" onClick={() => remove(page.id)} className={`${btn} text-red-600 hover:bg-red-50`}>🗑</button>
         </div>
       </div>
