@@ -1,55 +1,87 @@
 import { PDFDocument, degrees } from "pdf-lib";
 import JSZip from "jszip";
 
-export interface ExportPage {
-  /** 0-based index into the source PDF */
-  sourceIndex: number;
-  /** extra rotation the user applied, degrees clockwise */
-  rotation: 0 | 90 | 180 | 270;
-}
+export type ExportPage =
+  | {
+      kind: "pdf";
+      /** key into the documents record passed to buildPdf */
+      sourceId: string;
+      /** 0-based index into that source document */
+      sourceIndex: number;
+      rotation: 0 | 90 | 180 | 270;
+    }
+  | {
+      kind: "blank";
+      width: number;
+      height: number;
+      rotation: 0 | 90 | 180 | 270;
+    };
+
+/** Map of sourceId -> source PDF bytes */
+export type Documents = Record<string, Uint8Array>;
 
 function normaliseRotation(deg: number): 0 | 90 | 180 | 270 {
   const n = ((deg % 360) + 360) % 360;
-  return (Math.round(n / 90) * 90 % 360) as 0 | 90 | 180 | 270;
+  return ((Math.round(n / 90) * 90) % 360) as 0 | 90 | 180 | 270;
 }
 
-/** Build a brand-new PDF from the given source pages, in the given order. */
+function shortLabel(page: ExportPage, documents: Documents): string {
+  if (page.kind === "blank") return "blank";
+  void documents;
+  return `p${page.sourceIndex + 1}`;
+}
+
+/**
+ * Build a brand-new PDF from the given pages, in the given order.
+ * Pages may come from different source documents (merge) and blank
+ * pages may be interleaved.
+ */
 export async function buildPdf(
-  sourceBytes: Uint8Array,
+  documents: Documents,
   pages: ExportPage[],
 ): Promise<Uint8Array> {
   if (pages.length === 0) throw new Error("No pages to export");
-  const src = await PDFDocument.load(sourceBytes, { ignoreEncryption: false });
   const out = await PDFDocument.create();
-  const copied = await out.copyPages(
-    src,
-    pages.map((p) => p.sourceIndex),
-  );
-  copied.forEach((page, i) => {
-    const extra = pages[i].rotation;
-    if (extra) {
-      const current = page.getRotation().angle;
-      page.setRotation(degrees(normaliseRotation(current + extra)));
+
+  // Load each source once, copy page-by-page to preserve interleaved order.
+  const loaded = new Map<string, PDFDocument>();
+  for (const page of pages) {
+    if (page.kind === "blank") {
+      const blank = out.addPage([page.width, page.height]);
+      if (page.rotation) blank.setRotation(degrees(page.rotation));
+      continue;
     }
-    out.addPage(page);
-  });
+    let src = loaded.get(page.sourceId);
+    if (!src) {
+      const bytes = documents[page.sourceId];
+      if (!bytes) throw new Error("A source PDF is missing — reload the file.");
+      src = await PDFDocument.load(bytes, { ignoreEncryption: false });
+      loaded.set(page.sourceId, src);
+    }
+    const [copied] = await out.copyPages(src, [page.sourceIndex]);
+    if (page.rotation) {
+      const current = copied.getRotation().angle;
+      copied.setRotation(degrees(normaliseRotation(current + page.rotation)));
+    }
+    out.addPage(copied);
+  }
   return out.save();
 }
 
 export async function buildSinglePagePdfs(
-  sourceBytes: Uint8Array,
+  documents: Documents,
   pages: ExportPage[],
 ): Promise<{ name: string; bytes: Uint8Array }[]> {
   const results: { name: string; bytes: Uint8Array }[] = [];
   for (let i = 0; i < pages.length; i++) {
-    const bytes = await buildPdf(sourceBytes, [pages[i]]);
-    results.push({ name: `p${pages[i].sourceIndex + 1}`, bytes });
+    const bytes = await buildPdf(documents, [pages[i]]);
+    results.push({ name: `${String(i + 1).padStart(2, "0")}-${shortLabel(pages[i], documents)}`, bytes });
   }
   return results;
 }
 
 export async function buildChunkedPdfs(
-  sourceBytes: Uint8Array,
+  documents: Documents,
   pages: ExportPage[],
   chunkSize: number,
 ): Promise<{ name: string; bytes: Uint8Array }[]> {
@@ -57,10 +89,8 @@ export async function buildChunkedPdfs(
   const results: { name: string; bytes: Uint8Array }[] = [];
   for (let i = 0; i < pages.length; i += chunkSize) {
     const chunk = pages.slice(i, i + chunkSize);
-    const bytes = await buildPdf(sourceBytes, chunk);
-    const first = chunk[0].sourceIndex + 1;
-    const last = chunk[chunk.length - 1].sourceIndex + 1;
-    results.push({ name: `pages-${first}-${last}`, bytes });
+    const bytes = await buildPdf(documents, chunk);
+    results.push({ name: `pages-${i + 1}-${i + chunk.length}`, bytes });
   }
   return results;
 }

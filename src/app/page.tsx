@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, PDFDocumentLoadingTask } from "pdfjs-dist";
 import UploadZone from "@/components/UploadZone";
 import PageThumb from "@/components/PageThumb";
 import { useStore } from "@/lib/store";
@@ -15,85 +15,128 @@ import {
   downloadPdf,
   inspectPdf,
   zipPdfs,
+  type Documents,
   type ExportPage,
 } from "@/lib/pdf";
 
 export default function Home() {
-  const fileName = useStore((s) => s.fileName);
-  const bytes = useStore((s) => s.bytes);
+  const sources = useStore((s) => s.sources);
   const pages = useStore((s) => s.pages);
   const busy = useStore((s) => s.busy);
   const error = useStore((s) => s.error);
   const load = useStore((s) => s.load);
+  const addSource = useStore((s) => s.addSource);
   const reset = useStore((s) => s.reset);
   const setSelection = useStore((s) => s.setSelection);
+  const setSelectionPositions = useStore((s) => s.setSelectionPositions);
+  const insertBlank = useStore((s) => s.insertBlank);
   const setBusy = useStore((s) => s.setBusy);
   const setError = useStore((s) => s.setError);
 
-  const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
+  const [docs, setDocs] = useState<Record<string, PDFDocumentProxy>>({});
   const [rangeInput, setRangeInput] = useState("");
   const [rangeMsg, setRangeMsg] = useState<string | null>(null);
   const [chunkN, setChunkN] = useState(3);
-  const docRef = useRef<{ destroy: () => Promise<void> } | null>(null);
+  const tasksRef = useRef<Record<string, PDFDocumentLoadingTask>>({});
+  const addInputRef = useRef<HTMLInputElement>(null);
 
   const selectedCount = pages.filter((p) => p.selected).length;
+  const primaryName = sources[0]?.fileName ?? "";
+  const hasDoc = sources.length > 0;
+
+  const readFile = useCallback(
+    async (file: File): Promise<{ bytes: Uint8Array; pageCount: number } | null> => {
+      if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+        setError("That file isn't a PDF.");
+        return null;
+      }
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const { pageCount } = await inspectPdf(bytes);
+        return { bytes, pageCount };
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Couldn't open that file.");
+        return null;
+      }
+    },
+    [setError],
+  );
 
   const onFile = useCallback(
     async (file: File) => {
       setError(null);
       setRangeMsg(null);
-      if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
-        setError("That file isn't a PDF.");
-        return;
-      }
-      try {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const { pageCount } = await inspectPdf(buf);
-        load(file.name, buf, pageCount);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Couldn't open that file.");
-      }
+      const result = await readFile(file);
+      if (result) load(file.name, result.bytes, result.pageCount);
     },
-    [load, setError],
+    [load, readFile, setError],
   );
 
-  // Load the PDF.js document once per file, for thumbnails.
+  const onAddFile = useCallback(
+    async (file: File) => {
+      setError(null);
+      const result = await readFile(file);
+      if (result) addSource(file.name, result.bytes, result.pageCount);
+    },
+    [addSource, readFile, setError],
+  );
+
+  // Load a PDF.js document for each source, for thumbnails.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!bytes) {
-        setDoc(null);
-        return;
-      }
-      try {
-        const pdfjs = await import("pdfjs-dist");
-        pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-          "pdfjs-dist/build/pdf.worker.min.mjs",
-          import.meta.url,
-        ).toString();
-        const task = pdfjs.getDocument({ data: new Uint8Array(bytes) });
-        const loaded = await task.promise;
-        if (cancelled) {
-          void task.destroy();
-          return;
+      const missing = sources.filter((src) => !tasksRef.current[src.id]);
+      if (missing.length === 0) return;
+      const pdfjs = await import("pdfjs-dist");
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/build/pdf.worker.min.mjs",
+        import.meta.url,
+      ).toString();
+      for (const src of missing) {
+        const task = pdfjs.getDocument({ data: new Uint8Array(src.bytes) });
+        tasksRef.current[src.id] = task;
+        try {
+          const loaded = await task.promise;
+          if (!cancelled) setDocs((d) => ({ ...d, [src.id]: loaded }));
+        } catch {
+          if (!cancelled) setError("Couldn't render thumbnails for one PDF — exports still work.");
         }
-        if (docRef.current) void docRef.current.destroy();
-        docRef.current = task;
-        setDoc(loaded);
-      } catch {
-        if (!cancelled) setError("Couldn't render thumbnails for this PDF — extraction may still work if you reload.");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [bytes, setError]);
+  }, [sources, setError]);
+
+  // Clear rendered docs when everything is reset.
+  useEffect(() => {
+    if (sources.length === 0 && Object.keys(tasksRef.current).length > 0) {
+      for (const task of Object.values(tasksRef.current)) void task.destroy();
+      tasksRef.current = {};
+      setDocs({});
+    }
+  }, [sources]);
+
+  const documents = useCallback((): Documents => {
+    const out: Documents = {};
+    for (const src of sources) out[src.id] = src.bytes;
+    return out;
+  }, [sources]);
 
   const toExport = (items: typeof pages): ExportPage[] =>
-    items.map((p) => ({ sourceIndex: p.sourceIndex, rotation: p.rotation }));
+    items.map((p) =>
+      p.kind === "blank"
+        ? { kind: "blank" as const, width: p.width ?? 595.28, height: p.height ?? 841.89, rotation: p.rotation }
+        : {
+            kind: "pdf" as const,
+            sourceId: p.sourceId!,
+            sourceIndex: p.sourceIndex!,
+            rotation: p.rotation,
+          },
+    );
 
   const runExport = async (label: string, fn: () => Promise<void>) => {
-    if (!bytes) return;
+    if (!hasDoc) return;
     setBusy(label);
     setError(null);
     try {
@@ -105,46 +148,58 @@ export default function Home() {
     }
   };
 
+  const base = () => baseNameOf(primaryName);
+
   const doExtract = () =>
     runExport("Extracting…", async () => {
       const sel = pages.filter((p) => p.selected);
       if (sel.length === 0) throw new Error("Select at least one page first.");
-      const out = await buildPdf(bytes!, toExport(sel));
-      downloadPdf(out, `${baseNameOf(fileName)}-extract.pdf`);
+      const out = await buildPdf(documents(), toExport(sel));
+      downloadPdf(out, `${base()}-extract.pdf`);
     });
 
   const doSplitEach = () =>
     runExport("Splitting…", async () => {
-      const files = await buildSinglePagePdfs(bytes!, toExport(pages));
-      downloadBlob(await zipPdfs(baseNameOf(fileName), files), `${baseNameOf(fileName)}-pages.zip`);
+      const files = await buildSinglePagePdfs(documents(), toExport(pages));
+      downloadBlob(await zipPdfs(base(), files), `${base()}-pages.zip`);
     });
 
   const doSplitChunks = () =>
     runExport("Splitting…", async () => {
-      const files = await buildChunkedPdfs(bytes!, toExport(pages), chunkN);
-      downloadBlob(
-        await zipPdfs(baseNameOf(fileName), files),
-        `${baseNameOf(fileName)}-chunks-of-${chunkN}.zip`,
-      );
+      const files = await buildChunkedPdfs(documents(), toExport(pages), chunkN);
+      downloadBlob(await zipPdfs(base(), files), `${base()}-chunks-of-${chunkN}.zip`);
+    });
+
+  const doDownloadAll = () =>
+    runExport("Building…", async () => {
+      const out = await buildPdf(documents(), toExport(pages));
+      downloadPdf(out, `${base()}-all-pages.pdf`);
     });
 
   const applyRange = () => {
-    const result = parseRange(rangeInput, pages.length ? Math.max(...pages.map((p) => p.sourceIndex)) + 1 : 0);
-    // Range numbers refer to original page numbers, which match sourceIndex+1.
+    const result = parseRange(rangeInput, pages.length);
     if (result.error) {
       setRangeMsg(result.error);
       return;
     }
-    setSelection(result.pages);
+    setSelectionPositions(result.pages);
     setRangeMsg(
       result.warnings.length
         ? `Applied. ${result.warnings[0]}${result.warnings.length > 1 ? ` (+${result.warnings.length - 1} more)` : ""}`
-        : `Selected ${result.pages.length} page${result.pages.length === 1 ? "" : "s"}.`,
+        : `Selected ${result.pages.length} position${result.pages.length === 1 ? "" : "s"}.`,
     );
   };
 
+  const multiSource = sources.length > 1;
+  const sourceShort = (id?: string) => {
+    const src = sources.find((s) => s.id === id);
+    if (!src) return undefined;
+    const name = src.fileName.replace(/\.pdf$/i, "");
+    return name.length > 10 ? `${name.slice(0, 10)}…` : name;
+  };
+
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col px-4 pb-40 sm:px-6">
+    <div className="mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col px-4 pb-44 sm:px-6">
       <header className="flex items-center justify-between py-4">
         <div className="flex items-center gap-2">
           <span className="text-2xl" aria-hidden>✂️</span>
@@ -153,7 +208,7 @@ export default function Home() {
             100% in-browser · files never uploaded
           </span>
         </div>
-        {bytes && (
+        {hasDoc && (
           <button
             type="button"
             onClick={() => {
@@ -163,7 +218,7 @@ export default function Home() {
             }}
             className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
           >
-            Open another file
+            Start over
           </button>
         )}
       </header>
@@ -174,23 +229,25 @@ export default function Home() {
         </div>
       )}
 
-      {!bytes ? (
+      {!hasDoc ? (
         <main className="mt-6">
           <UploadZone onFile={onFile} />
           <p className="mt-4 text-center text-xs text-zinc-400">
-            Split PDF · Extract pages · Split every page · No account, no upload, no page limits
+            Split · Merge · Reorder · Extract pages · No account, no upload, no page limits
           </p>
         </main>
       ) : (
         <main>
           <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="max-w-full truncate text-base font-semibold text-zinc-800">{fileName}</h1>
+            <h1 className="max-w-full truncate text-base font-semibold text-zinc-800">
+              {sources.map((s) => s.fileName).join("  +  ")}
+            </h1>
             <span className="text-sm text-zinc-500">
-              {pages.length} page{pages.length === 1 ? "" : "s"} · {selectedCount} selected
+              {pages.length} page{pages.length === 1 ? "" : "s"} · {selectedCount} selected · drag cards to reorder
             </span>
           </div>
 
-          {/* Selection controls */}
+          {/* Selection + page tools */}
           <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-white p-3">
             <div className="flex gap-1">
               {(["all", "none", "invert", "even", "odd"] as const).map((mode) => (
@@ -204,13 +261,13 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <div className="flex min-w-56 flex-1 items-center gap-2">
+            <div className="flex min-w-52 flex-1 items-center gap-2">
               <input
                 value={rangeInput}
                 onChange={(e) => setRangeInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && applyRange()}
-                placeholder="Range e.g. 1-3, 5, 8-10"
-                aria-label="Page range, for example 1-3, 5"
+                placeholder="Positions e.g. 1-3, 5, 8-10"
+                aria-label="Page positions, for example 1-3, 5"
                 className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
               />
               <button
@@ -221,17 +278,50 @@ export default function Home() {
                 Apply
               </button>
             </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => addInputRef.current?.click()}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+              >
+                ＋ Add PDF (merge)
+              </button>
+              <button
+                type="button"
+                onClick={() => insertBlank()}
+                className="rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-200"
+              >
+                ＋ Blank page
+              </button>
+              <input
+                ref={addInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void onAddFile(f);
+                  e.target.value = "";
+                }}
+              />
+            </div>
             {rangeMsg && <p className="w-full text-xs text-zinc-500">{rangeMsg}</p>}
           </div>
 
           {pages.length === 0 ? (
             <p className="rounded-xl border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500">
-              All pages removed. Open another file to start again.
+              All pages removed. Start over to load a PDF again.
             </p>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-              {pages.map((p) => (
-                <PageThumb key={p.id} doc={doc} page={p} />
+              {pages.map((p, idx) => (
+                <PageThumb
+                  key={p.id}
+                  doc={p.sourceId ? (docs[p.sourceId] ?? null) : null}
+                  page={p}
+                  position={idx + 1}
+                  sourceLabel={multiSource ? sourceShort(p.sourceId) : undefined}
+                />
               ))}
             </div>
           )}
@@ -249,13 +339,22 @@ export default function Home() {
                 onClick={doExtract}
                 className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {busy === "Extracting…" ? busy : "Extract selected"}
+                Extract selected
+              </button>
+              <button
+                type="button"
+                disabled={!!busy || pages.length === 0}
+                onClick={doDownloadAll}
+                title="Download all pages in the current order as one PDF (use after reordering/merging)"
+                className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+              >
+                Download all in order
               </button>
               <button
                 type="button"
                 disabled={!!busy || pages.length === 0}
                 onClick={doSplitEach}
-                title="Every remaining page as its own PDF, in a zip"
+                title="Every page in the current list as its own PDF, in a zip"
                 className="rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 disabled:opacity-40"
               >
                 Every page → ZIP
@@ -265,7 +364,7 @@ export default function Home() {
                   type="button"
                   disabled={!!busy || pages.length === 0}
                   onClick={doSplitChunks}
-                  title="Chunk remaining pages into groups, in a zip"
+                  title="Chunk pages in the current order into groups, in a zip"
                   className="rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 disabled:opacity-40"
                 >
                   Every
