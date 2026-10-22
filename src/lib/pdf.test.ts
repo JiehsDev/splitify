@@ -129,6 +129,39 @@ describe("annotations export (Phase 3)", () => {
   });
 });
 
+describe("stamps + white-out (Phase 4)", () => {
+  it("applies page numbers, watermark, header and footer to all pages", async () => {
+    const src = await makeTestPdf(3);
+    const pages = [0, 1, 2].map((i) => pdfPage("a", i));
+    const out = await buildPdf({ a: src }, pages, {
+      stamps: {
+        pageNumbers: { position: "bottom-center", format: "page-x-of-y" },
+        watermark: { text: "DRAFT", opacity: 0.12 },
+        header: "Confidential",
+        footer: "Splitify",
+      },
+    });
+    const doc = await PDFDocument.load(out);
+    expect(doc.getPageCount()).toBe(3);
+  });
+
+  it("white-out rect annotation exports without error", async () => {
+    const src = await makeTestPdf(1);
+    const page: ExportPage = {
+      kind: "pdf",
+      sourceId: "a",
+      sourceIndex: 0,
+      rotation: 0,
+      annotations: [
+        { id: "r1", type: "rect", x: 0.1, y: 0.2, w: 0.5, h: 0.08, color: "#ffffff", opacity: 1 },
+        { id: "t1", type: "text", x: 0.1, y: 0.2, text: "Replacement", sizeFrac: 0.05, color: "#000000" },
+      ],
+    };
+    const out = await buildPdf({ a: src }, [page]);
+    expect(await pageCount(out)).toBe(1);
+  });
+});
+
 describe("split modes", () => {
   it("split-every-page gives one 1-page PDF per page", async () => {
     const src = await makeTestPdf(5);

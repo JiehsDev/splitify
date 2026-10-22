@@ -16,8 +16,10 @@ import {
   downloadPdf,
   inspectPdf,
   zipPdfs,
+  type BuildOptions,
   type Documents,
   type ExportPage,
+  type StampConfig,
 } from "@/lib/pdf";
 
 export default function Home() {
@@ -39,6 +41,24 @@ export default function Home() {
   const [rangeMsg, setRangeMsg] = useState<string | null>(null);
   const [chunkN, setChunkN] = useState(3);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Phase 4 stamps
+  const [pnOn, setPnOn] = useState(false);
+  const [pnPos, setPnPos] = useState<NonNullable<StampConfig["pageNumbers"]>["position"]>("bottom-center");
+  const [pnFormat, setPnFormat] = useState<NonNullable<StampConfig["pageNumbers"]>["format"]>("page-x-of-y");
+  const [wmOn, setWmOn] = useState(false);
+  const [wmText, setWmText] = useState("DRAFT");
+  const [wmOpacity, setWmOpacity] = useState(0.12);
+  const [headerText, setHeaderText] = useState("");
+  const [footerText, setFooterText] = useState("");
+
+  const stampOptions = (): BuildOptions | undefined => {
+    const stamps: StampConfig = {};
+    if (pnOn) stamps.pageNumbers = { position: pnPos, format: pnFormat };
+    if (wmOn && wmText.trim()) stamps.watermark = { text: wmText.trim(), opacity: wmOpacity };
+    if (headerText.trim()) stamps.header = headerText.trim();
+    if (footerText.trim()) stamps.footer = footerText.trim();
+    return Object.keys(stamps).length ? { stamps } : undefined;
+  };
   const tasksRef = useRef<Record<string, PDFDocumentLoadingTask>>({});
   const addInputRef = useRef<HTMLInputElement>(null);
 
@@ -163,25 +183,25 @@ export default function Home() {
     runExport("Extracting…", async () => {
       const sel = pages.filter((p) => p.selected);
       if (sel.length === 0) throw new Error("Select at least one page first.");
-      const out = await buildPdf(documents(), toExport(sel));
+      const out = await buildPdf(documents(), toExport(sel), stampOptions());
       downloadPdf(out, `${base()}-extract.pdf`);
     });
 
   const doSplitEach = () =>
     runExport("Splitting…", async () => {
-      const files = await buildSinglePagePdfs(documents(), toExport(pages));
+      const files = await buildSinglePagePdfs(documents(), toExport(pages), stampOptions());
       downloadBlob(await zipPdfs(base(), files), `${base()}-pages.zip`);
     });
 
   const doSplitChunks = () =>
     runExport("Splitting…", async () => {
-      const files = await buildChunkedPdfs(documents(), toExport(pages), chunkN);
+      const files = await buildChunkedPdfs(documents(), toExport(pages), chunkN, stampOptions());
       downloadBlob(await zipPdfs(base(), files), `${base()}-chunks-of-${chunkN}.zip`);
     });
 
   const doDownloadAll = () =>
     runExport("Building…", async () => {
-      const out = await buildPdf(documents(), toExport(pages));
+      const out = await buildPdf(documents(), toExport(pages), stampOptions());
       downloadPdf(out, `${base()}-all-pages.pdf`);
     });
 
@@ -315,6 +335,81 @@ export default function Home() {
               />
             </div>
             {rangeMsg && <p className="w-full text-xs text-zinc-500">{rangeMsg}</p>}
+          </div>
+
+          {/* Stamps panel (Phase 4) */}
+          <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Stamps — applied to every exported page
+            </p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <label className="flex items-center gap-2 text-sm text-zinc-700">
+                <input type="checkbox" checked={pnOn} onChange={(e) => setPnOn(e.target.checked)} className="h-4 w-4 accent-emerald-600" />
+                Page numbers
+              </label>
+              <select
+                value={pnPos}
+                onChange={(e) => setPnPos(e.target.value as typeof pnPos)}
+                disabled={!pnOn}
+                aria-label="Page number position"
+                className="rounded-lg border border-zinc-300 px-2 py-1.5 text-sm disabled:opacity-40"
+              >
+                <option value="bottom-center">Bottom centre</option>
+                <option value="bottom-left">Bottom left</option>
+                <option value="bottom-right">Bottom right</option>
+                <option value="top-center">Top centre</option>
+              </select>
+              <select
+                value={pnFormat}
+                onChange={(e) => setPnFormat(e.target.value as typeof pnFormat)}
+                disabled={!pnOn}
+                aria-label="Page number format"
+                className="rounded-lg border border-zinc-300 px-2 py-1.5 text-sm disabled:opacity-40"
+              >
+                <option value="page-x-of-y">Page 2 of 9</option>
+                <option value="x-of-y">2 / 9</option>
+                <option value="x">2</option>
+              </select>
+              <label className="flex items-center gap-2 text-sm text-zinc-700">
+                <input type="checkbox" checked={wmOn} onChange={(e) => setWmOn(e.target.checked)} className="h-4 w-4 accent-emerald-600" />
+                Watermark
+              </label>
+              <input
+                value={wmText}
+                onChange={(e) => setWmText(e.target.value)}
+                disabled={!wmOn}
+                placeholder="Watermark text"
+                aria-label="Watermark text"
+                className="w-36 rounded-lg border border-zinc-300 px-2 py-1.5 text-sm disabled:opacity-40"
+              />
+              <label className={`flex items-center gap-1 text-sm text-zinc-600 ${wmOn ? "" : "opacity-40"}`}>
+                Fade
+                <input
+                  type="range"
+                  min={0.05}
+                  max={0.4}
+                  step={0.01}
+                  value={wmOpacity}
+                  onChange={(e) => setWmOpacity(parseFloat(e.target.value))}
+                  disabled={!wmOn}
+                  aria-label="Watermark opacity"
+                />
+              </label>
+              <input
+                value={headerText}
+                onChange={(e) => setHeaderText(e.target.value)}
+                placeholder="Header text (optional)"
+                aria-label="Header text"
+                className="w-44 rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                value={footerText}
+                onChange={(e) => setFooterText(e.target.value)}
+                placeholder="Footer text (optional)"
+                aria-label="Footer text"
+                className="w-44 rounded-lg border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+            </div>
           </div>
 
           {pages.length === 0 ? (

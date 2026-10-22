@@ -6,7 +6,7 @@ import type { PageItem } from "@/lib/store";
 import { useStore, nextId } from "@/lib/store";
 import type { Annotation } from "@/lib/annotations";
 
-type Tool = "text" | "draw" | "highlight" | "image";
+type Tool = "text" | "draw" | "highlight" | "image" | "whiteout";
 
 export default function PageEditor({
   page,
@@ -38,6 +38,7 @@ export default function PageEditor({
   const [textValue, setTextValue] = useState("");
   const [showSig, setShowSig] = useState(false);
   const strokeRef = useRef<{ x: number; y: number }[] | null>(null);
+  const rectRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const sigStroke = useRef(false);
   const pendingImageAt = useRef<{ x: number; y: number }>({ x: 0.35, y: 0.4 });
 
@@ -106,6 +107,11 @@ export default function PageEditor({
         for (const p of ann.points.slice(1)) ctx.lineTo(p.x * size.w, p.y * size.h);
         ctx.stroke();
         ctx.globalAlpha = 1;
+      } else if (ann.type === "rect") {
+        ctx.fillStyle = ann.color;
+        ctx.globalAlpha = ann.opacity;
+        ctx.fillRect(ann.x * size.w, ann.y * size.h, ann.w * size.w, ann.h * size.h);
+        ctx.globalAlpha = 1;
       } else if (ann.type === "image") {
         const img = new Image();
         img.onload = () => {
@@ -115,6 +121,18 @@ export default function PageEditor({
       }
     };
     for (const ann of annotations) drawAnn(ann);
+    if (rectRef.current) {
+      const r = rectRef.current;
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#10b981";
+      ctx.lineWidth = 1;
+      const x = Math.min(r.x0, r.x1) * size.w;
+      const y = Math.min(r.y0, r.y1) * size.h;
+      const w = Math.abs(r.x1 - r.x0) * size.w;
+      const h = Math.abs(r.y1 - r.y0) * size.h;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+    }
     if (strokeRef.current && strokeRef.current.length > 0) {
       drawAnn({
         id: "draft",
@@ -142,7 +160,11 @@ export default function PageEditor({
 
   const onPointerDown = (e: React.PointerEvent) => {
     const p = frac(e);
-    if (tool === "draw" || tool === "highlight") {
+    if (tool === "whiteout") {
+      rectRef.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      (e.target as Element).setPointerCapture(e.pointerId);
+      redraw();
+    } else if (tool === "draw" || tool === "highlight") {
       strokeRef.current = [p];
       (e.target as Element).setPointerCapture(e.pointerId);
       redraw();
@@ -156,6 +178,13 @@ export default function PageEditor({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (rectRef.current) {
+      const p = frac(e);
+      rectRef.current.x1 = p.x;
+      rectRef.current.y1 = p.y;
+      redraw();
+      return;
+    }
     if (!strokeRef.current) return;
     const p = frac(e);
     const last = strokeRef.current[strokeRef.current.length - 1];
@@ -165,6 +194,28 @@ export default function PageEditor({
   };
 
   const onPointerUp = () => {
+    if (rectRef.current) {
+      const r = rectRef.current;
+      rectRef.current = null;
+      const x = Math.min(r.x0, r.x1);
+      const y = Math.min(r.y0, r.y1);
+      const w = Math.abs(r.x1 - r.x0);
+      const h = Math.abs(r.y1 - r.y0);
+      if (w > 0.005 && h > 0.005) {
+        addAnnotation(page.id, {
+          id: nextId("a"),
+          type: "rect",
+          x,
+          y,
+          w,
+          h,
+          color: "#ffffff",
+          opacity: 1,
+        });
+      }
+      redraw();
+      return;
+    }
     if (!strokeRef.current) return;
     const points = strokeRef.current;
     strokeRef.current = null;
@@ -292,6 +343,7 @@ export default function PageEditor({
           {toolBtn("draw", "✎ Draw")}
           {toolBtn("highlight", "🖍 Highlight")}
           {toolBtn("image", "🖼 Image")}
+          {toolBtn("whiteout", "⬜ White-out")}
           <button
             type="button"
             onClick={() => setShowSig(true)}
@@ -336,6 +388,7 @@ export default function PageEditor({
           {tool === "text" && "Tap where the text should start, type, press Enter."}
           {(tool === "draw" || tool === "highlight") && "Draw on the page with your finger or mouse."}
           {tool === "image" && "Tap where the image's top-left corner should go, then pick an image."}
+          {tool === "whiteout" && "Drag a box over the text you want to cover — then use the Text tool to type over it."}
           {" "}Annotations are flattened into the PDF when you export.
         </p>
 

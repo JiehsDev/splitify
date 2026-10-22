@@ -32,6 +32,18 @@ export type Annotation =
     }
   | {
       id: string;
+      type: "rect";
+      x: number;
+      y: number;
+      /** width/height as fractions of displayed page width/height */
+      w: number;
+      h: number;
+      /** fill colour, #ffffff for white-out */
+      color: string;
+      opacity: number;
+    }
+  | {
+      id: string;
       type: "image";
       x: number;
       y: number;

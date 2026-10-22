@@ -30,11 +30,22 @@ Pick the pages you need from a PDF and save them as a new PDF.
 - Works on blank pages too. Note: annotation placement is exact on unrotated
   pages; on rotated pages the export applies the rotation transform (best effort)
 
+### Phase 4 — Stamps + white-out (built 2026-10-22)
+- **White-out tool** in the editor: drag a box over existing text to cover it,
+  then type the replacement over it with the Text tool (this is how "edit PDF
+  text" works in practice — PDFs have no reflowable text)
+- **Stamps panel** (applied to every exported page, all export modes):
+  - Page numbers: position (bottom centre/left/right, top centre) and format
+    (`Page 2 of 9`, `2 / 9`, or `2`)
+  - Watermark: your text, diagonal across the page, adjustable fade
+  - Header and footer text
+- Page numbers count the pages in each exported file (a split chunk restarts at 1)
+
 ## Run it
 ```bash
 npm install
 npm run dev      # http://localhost:3000
-npm test         # 32 tests: range parser, extraction/split/rotation, merge, store ops, annotation coords + export
+npm test         # 34 tests: range parser, extraction/split/rotation, merge, store ops, annotation coords + export, stamps
 npm run build    # production build
 ```
 
@@ -45,8 +56,8 @@ Any static/Next host. On Vercel: import this repo, framework = Next.js, no env v
 Next.js (App Router) + TypeScript + Tailwind · `pdfjs-dist` (rendering) ·
 `pdf-lib` (output) · `jszip` · Zustand
 
-## Roadmap
-- Phase 4: page numbers, watermark, white-out + retype
+## Possible next steps
+- Deploy to Vercel · PDF → images export · metadata edit · compress (image downscale)
 
 > Note: true Word-style editing of existing PDF text is out of scope — PDFs have no
 > text reflow; like paid tools, Phase 4 uses white-out + type-over.
