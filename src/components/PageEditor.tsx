@@ -30,6 +30,7 @@ export default function PageEditor({
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const sigRef = useRef<HTMLCanvasElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
 
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [tool, setTool] = useState<Tool>("text");
@@ -43,6 +44,15 @@ export default function PageEditor({
   const pendingImageAt = useRef<{ x: number; y: number }>({ x: 0.35, y: 0.4 });
 
   const isBlank = page.kind === "blank";
+
+  // Focus the draft text field when a draft is placed. (The previous version
+  // used a floating autoFocus input that committed/discarded on blur — the
+  // blur fired immediately in real browsers and the input vanished before
+  // the user could type. The draft field now lives in a fixed bar and only
+  // commits on Enter / the Add button.)
+  useEffect(() => {
+    if (textDraft) textInputRef.current?.focus();
+  }, [textDraft]);
 
   // ---- Render the page itself ----
   useEffect(() => {
@@ -121,6 +131,29 @@ export default function PageEditor({
       }
     };
     for (const ann of annotations) drawAnn(ann);
+    if (textDraft) {
+      // Live preview of the pending text + a position marker.
+      const x = textDraft.x * size.w;
+      const y = textDraft.y * size.h;
+      const fontSize = Math.round(0.035 * size.h);
+      ctx.strokeStyle = "#10b981";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x - 8, y);
+      ctx.lineTo(x + 8, y);
+      ctx.moveTo(x, y - 2);
+      ctx.lineTo(x, y + fontSize + 4);
+      ctx.stroke();
+      ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+      ctx.textBaseline = "top";
+      if (textValue) {
+        ctx.fillStyle = color;
+        ctx.fillText(textValue, x, y);
+      } else {
+        ctx.fillStyle = "rgba(120,120,120,0.6)";
+        ctx.fillText("Your text will appear here", x, y);
+      }
+    }
     if (rectRef.current) {
       const r = rectRef.current;
       ctx.fillStyle = "#ffffff";
@@ -143,7 +176,7 @@ export default function PageEditor({
         opacity: tool === "highlight" ? 0.35 : 1,
       });
     }
-  }, [annotations, size, color, tool]);
+  }, [annotations, size, color, tool, textDraft, textValue]);
 
   useEffect(() => {
     redraw();
@@ -323,7 +356,10 @@ export default function PageEditor({
   const toolBtn = (t: Tool, label: string) => (
     <button
       type="button"
-      onClick={() => setTool(t)}
+      onClick={() => {
+        setTool(t);
+        if (t !== "text") setTextDraft(null);
+      }}
       className={`rounded-lg px-3 py-2 text-sm font-medium ${
         tool === t ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
       }`}
@@ -384,8 +420,46 @@ export default function PageEditor({
           </button>
         </div>
 
+        {textDraft && (
+          <div className="flex items-center gap-2 border-b border-emerald-100 bg-emerald-50 px-3 py-2">
+            <span className="hidden shrink-0 text-sm font-medium text-emerald-900 sm:inline">
+              Text at the ＋ mark:
+            </span>
+            <input
+              ref={textInputRef}
+              value={textValue}
+              onChange={(e) => setTextValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitText();
+                if (e.key === "Escape") setTextDraft(null);
+              }}
+              placeholder="Type your text…"
+              aria-label="Text to add to the page"
+              className="min-w-0 flex-1 rounded-lg border-2 border-emerald-500 bg-white px-3 py-2 text-base outline-none"
+              style={{ color }}
+            />
+            <button
+              type="button"
+              onClick={commitText}
+              className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              ✓ Add
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTextDraft(null);
+                setTextValue("");
+              }}
+              className="shrink-0 rounded-lg bg-white px-3 py-2 text-sm font-medium text-zinc-600"
+            >
+              ✗
+            </button>
+          </div>
+        )}
+
         <p className="px-3 pt-2 text-xs text-zinc-500">
-          {tool === "text" && "Tap where the text should start, type, press Enter."}
+          {tool === "text" && "Tap on the page where the text should start — a ＋ mark appears and you type in the green bar above. Tap again to move the mark."}
           {(tool === "draw" || tool === "highlight") && "Draw on the page with your finger or mouse."}
           {tool === "image" && "Tap where the image's top-left corner should go, then pick an image."}
           {tool === "whiteout" && "Drag a box over the text you want to cover — then use the Text tool to type over it."}
@@ -405,26 +479,6 @@ export default function PageEditor({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
             />
-            {textDraft && size && (
-              <input
-                autoFocus
-                value={textValue}
-                onChange={(e) => setTextValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitText();
-                  if (e.key === "Escape") setTextDraft(null);
-                }}
-                onBlur={commitText}
-                placeholder="Type, then Enter"
-                className="absolute z-10 min-w-40 rounded border-2 border-emerald-500 bg-white/95 px-1 outline-none"
-                style={{
-                  left: textDraft.x * size.w,
-                  top: textDraft.y * size.h,
-                  fontSize: Math.round(0.035 * size.h),
-                  color,
-                }}
-              />
-            )}
           </div>
         </div>
 
